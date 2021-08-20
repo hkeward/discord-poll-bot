@@ -1,0 +1,9 @@
+version: '3.8'
+services:
+    discord-poll-bot:
+        image: discord-poll-bot:latest
+        restart: unless-stopped
+        entrypoint: ["pollbot.py"]
+        network_mode: host
+        environment:
+            - DISCORD_POLL_BOT_TOKEN=${DISCORD_POLL_BOT_TOKEN}
