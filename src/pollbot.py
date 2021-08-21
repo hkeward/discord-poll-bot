@@ -7,7 +7,7 @@ import os
 client = discord.Client()
 token = os.getenv("DISCORD_POLL_BOT_TOKEN")
 
-latest_poll = None
+poll_request_id_to_poll_message = dict()
 
 poll_option_emoji = [
     "\U0001F1E6",
@@ -50,7 +50,7 @@ Show commands
 Create a poll
 `$poll {poll name} [option A] [option B] [option C]`
 
-Update a poll
+Update a poll -- you can also simply edit the message you used to create the poll!
 `$poll update {new poll name} [option A] [option B]`
 
     """
@@ -79,7 +79,7 @@ def content_to_embed(content):
     return bot_reactions, embedded_message
 
 
-async def create_poll(channel, content):
+async def create_poll(channel, content, incoming_message_id):
     try:
         bot_reactions, embedded_message = content_to_embed(content)
 
@@ -95,11 +95,12 @@ async def create_poll(channel, content):
         )
         await usage(channel)
 
-    global latest_poll
-    latest_poll = bot_poll_message
+    global poll_request_id_to_poll_message
+    poll_request_id_to_poll_message[incoming_message_id] = bot_poll_message
 
 
-async def edit_poll(previous_poll_message, new_content):
+
+async def edit_poll(previous_poll_message, new_content, incoming_message_id):
     try:
         bot_reactions, embedded_message = content_to_embed(new_content)
 
@@ -120,6 +121,10 @@ async def edit_poll(previous_poll_message, new_content):
         elif length_previous_poll < length_edited_poll:
             for emoji in bot_reactions:
                 await previous_poll_message.add_reaction(emoji)
+
+        global poll_request_id_to_poll_message
+        if incoming_message_id not in poll_request_id_to_poll_message:
+            poll_request_id_to_poll_message[incoming_message_id] = previous_poll_message
 
     except Exception as exception:
         print("[ERROR] {}".format(exception))
@@ -151,16 +156,36 @@ def main(args):
                 await usage(channel)
 
             elif subcommand == "update":
-
-                if latest_poll is None:
-                    await channel.send("No previous poll detected; creating new one")
-                    await create_poll(channel, message.content)
+                if len(poll_request_id_to_poll_message) > 0:
+                    poll_message_to_edit = poll_request_id_to_poll_message[list(poll_request_id_to_poll_message)[-1]]
                 else:
-                    await edit_poll(latest_poll, message.content)
+                    poll_message_to_edit = None
+
+                if poll_message_to_edit is None:
+                    await channel.send("No previous poll detected; creating new one")
+                    await create_poll(channel, message.content, message.id)
+                else:
+                    await edit_poll(poll_message_to_edit, message.content, message.id)
 
             else:
-                await create_poll(channel, message.content)
+                await create_poll(channel, message.content, message.id)
 
+    @client.event
+    async def on_message_edit(before_message, after_message):
+        channel = after_message.channel
+
+        if args.debug and channel.name != "testing":
+            return
+
+        if after_message.author == client.user:
+            return
+
+        if after_message.content.startswith("$poll"):
+            if before_message.content.startswith("$poll"):
+                poll_message_to_edit = poll_request_id_to_poll_message[after_message.id]
+                await edit_poll(poll_message_to_edit, after_message.content, after_message.id)
+            else:
+                await create_poll(channel, after_message.content, after_message.id)
 
     client.run(token)
 
