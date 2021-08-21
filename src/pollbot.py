@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
+from argparse import ArgumentParser
 import discord
 import os
 
 client = discord.Client()
 token = os.getenv("DISCORD_POLL_BOT_TOKEN")
+
+latest_poll = None
 
 poll_option_emoji = [
     "\U0001F1E6",
@@ -37,61 +40,139 @@ poll_option_emoji = [
 
 
 async def usage(channel):
-    help_string = """Hello I'm a pollbot that doesn't serve ads
+    help_string = """
+Hello, I'm pollbot :]
 
-    Usage: $poll {poll name} [option A] [option B] [option C]
+**Usage**
+Show commands
+`$poll help`
+
+Create a poll
+`$poll {poll name} [option A] [option B] [option C]`
+
+Update a poll
+`$poll update {new poll name} [option A] [option B]`
 
     """
     await channel.send(help_string)
 
+def content_to_embed(content):
+    poll_title = content.split("{")[1].split("}")[0]
+    poll_options = [
+        option.strip("] ")
+        for option in content.split("}")[1].strip().split("[")[1:]
+    ]
 
-@client.event
-async def on_ready():
-    print("Logged in as {0.user}".format(client))
+    embedded_message = discord.Embed(title=poll_title, color=0xCCEE6D)
+
+    # append poll option emoji to each option
+    bot_reactions = list()
+    for index, option in enumerate(poll_options):
+        emoji = poll_option_emoji[index]
+        embedded_message.add_field(
+            name="\U0000200B",
+            value="{}\t{}".format(emoji, option),
+            inline=False,
+        )
+        bot_reactions.append(emoji)
+
+    return bot_reactions, embedded_message
 
 
-@client.event
-async def on_message(message):
-    channel = message.channel
+async def create_poll(channel, content):
+    try:
+        bot_reactions, embedded_message = content_to_embed(content)
 
-    if message.author == client.user:
-        return
+        bot_poll_message = await channel.send(embed=embedded_message)
 
-    if message.content.startswith("$poll"):
-        if "help" in message.content:
-            await usage(channel)
-        else:
-            try:
-                poll_title = message.content.split("{")[1].split("}")[0]
-                poll_options = [
-                    option.strip("] ")
-                    for option in message.content.split("}")[1].strip().split("[")[1:]
-                ]
+        for emoji in bot_reactions:
+            await bot_poll_message.add_reaction(emoji)
 
-                embedded_message = discord.Embed(title=poll_title, color=0xCCEE6D)
+    except Exception as exception:
+        print("[ERROR] {}".format(exception))
+        await channel.send(
+            "Something went wrong; did you format your command properly?"
+        )
+        await usage(channel)
 
-                # append poll option emoji to each option
-                bot_reactions = list()
-                for index, option in enumerate(poll_options):
-                    emoji = poll_option_emoji[index]
-                    embedded_message.add_field(
-                        name="\U0000200B",
-                        value="{}\t{}".format(emoji, option),
-                        inline=False,
-                    )
-                    bot_reactions.append(emoji)
+    global latest_poll
+    latest_poll = bot_poll_message
 
-                bot_message = await channel.send(embed=embedded_message)
 
-                for emoji in bot_reactions:
-                    await bot_message.add_reaction(emoji)
+async def edit_poll(previous_poll_message, new_content):
+    try:
+        bot_reactions, embedded_message = content_to_embed(new_content)
 
-            except Exception as exception:
-                print("[ERROR] {}".format(exception))
-                await channel.send(
-                    "Something went wrong; did you format your command properly?"
-                )
+        length_previous_poll = len(previous_poll_message.embeds[0].fields)
+        length_edited_poll = len(embedded_message.fields)
+
+        await previous_poll_message.edit(embed=embedded_message)
+
+        if length_previous_poll > length_edited_poll:
+            emoji_to_remove = poll_option_emoji[length_edited_poll:length_previous_poll]
+
+            updated_message = await previous_poll_message.channel.fetch_message(previous_poll_message.id)
+            reactions = updated_message.reactions
+            for reaction in reactions:
+                if reaction.emoji in emoji_to_remove:
+                    await reaction.clear()
+
+        elif length_previous_poll < length_edited_poll:
+            for emoji in bot_reactions:
+                await previous_poll_message.add_reaction(emoji)
+
+    except Exception as exception:
+        print("[ERROR] {}".format(exception))
+        await previous_poll_message.channel.send(
+            "Something went wrong editing that poll"
+        )
+        await usage(previous_poll_message.channel)
+
+
+def main(args):
+    @client.event
+    async def on_ready():
+        print("Logged in as {0.user}".format(client))
+
+    @client.event
+    async def on_message(message):
+        channel = message.channel
+
+        if args.debug and channel.name != "testing":
+            return
+
+        if message.author == client.user:
+            return
+
+        if message.content.startswith("$poll"):
+            subcommand = message.content.split(" ")[1]
+
+            if subcommand == "help":
                 await usage(channel)
 
+            elif subcommand == "update":
 
-client.run(token)
+                if latest_poll is None:
+                    await channel.send("No previous poll detected; creating new one")
+                    await create_poll(channel, message.content)
+                else:
+                    await edit_poll(latest_poll, message.content)
+
+            else:
+                await create_poll(channel, message.content)
+
+
+    client.run(token)
+
+
+
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description="Run poll bot")
+
+    parser.add_argument("-d", "--debug", default=False, action="store_true", help="Run bot only in the `testing` channel", required=False)
+
+    args = parser.parse_args()
+
+    main(args)
